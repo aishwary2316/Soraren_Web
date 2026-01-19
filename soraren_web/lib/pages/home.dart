@@ -1,10 +1,9 @@
-// lib/pages/home.dart
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
+import '../services/api_service.dart';
 import '../utils/validators.dart';
 import 'verification.dart';
 
@@ -20,40 +19,61 @@ class _HomePageContentState extends State<HomePageContent> {
   static const Color _alertRed = Color(0xFFDC2626);
 
   final ImagePicker _imagePicker = ImagePicker();
+  final ApiService _api = ApiService();
   XFile? _pickedFile;
-  bool _isIdentifying = false;
 
+  /// Handles image selection from Camera or Gallery
   Future<void> _pickImage(ImageSource source) async {
     final XFile? image = await _imagePicker.pickImage(source: source, imageQuality: 85);
     if (image != null) {
-      // Security: Validate Magic Bytes
-      if (!kIsWeb && !await Validators.isValidImage(File(image.path))) {
-        _showSnack('Security Error: Invalid file format', isError: true);
-        return;
+      if (!kIsWeb) {
+        final isValid = await Validators.isValidImage(File(image.path));
+        if (!isValid) {
+          _showSnack('Security Error: Invalid file format', isError: true);
+          return;
+        }
       }
       setState(() => _pickedFile = image);
     }
   }
 
-  Future<void> _identifySuspect() async {
+  /// Handles image selection from the File Picker (Browse)
+  Future<void> _pickFile() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+    );
+
+    if (result != null) {
+      if (kIsWeb) {
+        // On Web, the path might be a blob URL
+        setState(() => _pickedFile = XFile(result.files.single.path ?? ''));
+      } else if (result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        if (await Validators.isValidImage(file)) {
+          setState(() => _pickedFile = XFile(result.files.single.path!));
+        } else {
+          _showSnack('Security Error: Invalid file format', isError: true);
+        }
+      }
+    }
+  }
+
+  /// Triggers the verification process defined in verification.dart
+  void _identifySuspect() {
     if (_pickedFile == null) {
-      _showSnack('Please upload a suspect image', isError: true);
+      _showSnack('Please select a suspect image to verify', isError: true);
       return;
     }
 
-    setState(() => _isIdentifying = true);
-    try {
-      // await verifyDriverAndShowDialog(
-      //   context,
-      //   driverImageFile: File(_pickedFile!.path),
-      //   location: 'Manipur-HQ',
-      //   tollgate: 'Main-Secure',
-      // );
-    } catch (e) {
-      _showSnack('Identification failed: $e', isError: true);
-    } finally {
-      setState(() => _isIdentifying = false);
-    }
+    // This call uses the helper function from verification.dart
+    // to handle the loading dialog and API response before showing the dashboard.
+    showVerificationDialog(
+      context,
+      api: _api,
+      imagePath: _pickedFile!.path,
+      location: 'Imphal-HQ', // Default location as per requirements
+    );
   }
 
   @override
@@ -74,6 +94,7 @@ class _HomePageContentState extends State<HomePageContent> {
 
   Widget _buildHeader() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: _policeBlue.withOpacity(0.05),
@@ -87,8 +108,9 @@ class _HomePageContentState extends State<HomePageContent> {
           Text(
             "Suspect Identification Portal",
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _policeBlue),
+            textAlign: TextAlign.center,
           ),
-          Text("Official Manipur Police Database Access", style: TextStyle(color: Colors.grey)),
+          Text("Official Database Access", style: TextStyle(color: Colors.grey)),
         ],
       ),
     );
@@ -109,15 +131,19 @@ class _HomePageContentState extends State<HomePageContent> {
               ? Icon(Icons.cloud_upload_outlined, size: 80, color: Colors.grey.shade300)
               : ClipRRect(
             borderRadius: BorderRadius.circular(15),
-            child: Image.file(File(_pickedFile!.path), height: 180, width: 180, fit: BoxFit.cover),
+            child: kIsWeb
+                ? Image.network(_pickedFile!.path, height: 250, width: 250, fit: BoxFit.cover)
+                : Image.file(File(_pickedFile!.path), height: 250, width: 250, fit: BoxFit.cover),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 25),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _sourceButton(Icons.camera_alt, "Camera", () => _pickImage(ImageSource.camera)),
-              const SizedBox(width: 15),
+              const SizedBox(width: 8),
               _sourceButton(Icons.photo_library, "Gallery", () => _pickImage(ImageSource.gallery)),
+              const SizedBox(width: 8),
+              _sourceButton(Icons.folder_open, "Browse", _pickFile),
             ],
           ),
         ],
@@ -130,13 +156,14 @@ class _HomePageContentState extends State<HomePageContent> {
       width: double.infinity,
       height: 60,
       child: ElevatedButton.icon(
-        onPressed: _isIdentifying ? null : _identifySuspect,
-        icon: _isIdentifying ? const SizedBox.shrink() : const Icon(Icons.security),
-        label: Text(_isIdentifying ? "PROCESSING..." : "IDENTIFY SUSPECT"),
+        onPressed: _identifySuspect,
+        icon: const Icon(Icons.security),
+        label: const Text("VERIFY IDENTITY", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.1)),
         style: ElevatedButton.styleFrom(
-          backgroundColor: _alertRed, // Red Action Button
+          backgroundColor: _alertRed,
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          elevation: 4,
         ),
       ),
     );
@@ -151,13 +178,18 @@ class _HomePageContentState extends State<HomePageContent> {
         foregroundColor: _policeBlue,
         side: const BorderSide(color: _policeBlue),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
       ),
     );
   }
 
   void _showSnack(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: isError ? _alertRed : _policeBlue),
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? _alertRed : _policeBlue,
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 }

@@ -37,7 +37,7 @@ class ApiService {
   /// Clears local session data for logout
   Future<void> localLogout() => deleteToken();
 
-  // Resolves the error in home_page.dart
+
   Future<Map<String, dynamic>> logoutServer(String userId) async {
     final uri = Uri.parse('$baseUrl/api/auth/logout/$userId'); // Adjust path if backend differs
     final token = await getToken();
